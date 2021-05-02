@@ -1267,7 +1267,7 @@ def plot_bte_v_translate(trans_sweep, mean_te1, mean_te2, mean_te3, mean_te4):
 
 
 #Registering-Posteriors Experiment------------------------------------------------------------------------------------------------
-def te_v_angle_reg_pos(rep=1000):
+def te_v_angle_reg_pos(n_trees=10, n_samples_source=200, rep=1000):
     # store the raw generalization errors
     errors_all = {}
     angles_all = [np.linspace(0,180,13), 
@@ -1278,9 +1278,9 @@ def te_v_angle_reg_pos(rep=1000):
         errors = np.empty((len(angles), 6))
         for i,angle in enumerate(angles):
             if alg == 'OT':
-                errors[i,:] = exp_reg_pos_OT(angle, transform)
+                errors[i,:] = exp_reg_pos_OT(angle, transform, n_trees, n_samples_source)
             elif alg == 'SE':
-                errors[i,:] = exp_reg_pos_sitk(angle, transform)
+                errors[i,:] = exp_reg_pos_sitk(angle, transform, n_trees, n_samples_source)
         return errors
 
     # run the experiment for all 3 types of transformations
@@ -1321,7 +1321,7 @@ def te_v_angle_reg_pos(rep=1000):
 
 
 def plot_te_v_angle_res_pos(TEs_all):
-    colors = ['g','r']
+    colors = ['g','r','b']
     fontsize=30; labelsize=28
     fig, axs = plt.subplots(2,3, figsize=(30,14))
     angles = [np.linspace(0,180,13), 
@@ -1343,7 +1343,7 @@ def plot_te_v_angle_res_pos(TEs_all):
                     lw=3, c=colors[data_idx], ls=line_styles[data_idx]
                 )
                 ax.set_xticks(angles[i])
-                ax.set_xticklabels(angles[i], rotation=45)
+                ax.set_xticklabels(angles[i].astype(int), rotation=45)
                 if i == 0:
                     ax.set_ylabel(ylabels[j], fontsize=fontsize)
                 ax.tick_params(labelsize=labelsize)
@@ -1360,4 +1360,3 @@ def plot_te_v_angle_res_pos(TEs_all):
                         ax.set_xlabel('Angle of Transformation (Degrees)', fontsize=fontsize)
                     if i == 2:
                         ax.legend(loc='upper center', fontsize=20, frameon=False)
-
