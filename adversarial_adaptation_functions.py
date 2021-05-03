@@ -1,5 +1,6 @@
 import numpy as np
 import seaborn as sns
+from matplotlib.colors import ListedColormap
 
 from math import log2, ceil
 from matplotlib import pyplot as plt
@@ -836,6 +837,7 @@ def experiment_rxor(
     register_nlr=False,
     register_otp=False,
     register_icp=False,
+    bte=True,
 ):
 
     if n_task1 == 0 and n_task2 == 0:
@@ -859,12 +861,24 @@ def experiment_rxor(
     
     #registration
     if register_cpd:
-        X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = cpd_reg(X_task1.copy(), X_task2.copy())
+            
     if register_nlr:
-        X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())   
+        if bte:
+            X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = nlr_reg(X_task1.copy(), X_task2.copy())
+        
     if register_icp:
-        T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
-        X_task2 = X_3.T[:, 0:2]
+        if bte:
+            T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
+            X_task2 = X_3.T[:, 0:2]
+        else:
+            T, X_3, i = icp(X_task1.copy(), X_task2.copy(), y_task1.copy(), y_task2.copy())
+            X_task1 = X_3.T[:, 0:2]
 
     #train and predict
     progressive_learner.add_task(X_task1, y_task1, num_transformers=n_trees)
@@ -873,11 +887,16 @@ def experiment_rxor(
     uf.add_task(X_task1, y_task1, num_transformers=2 * n_trees)
     uf.add_task(X_task2, y_task2, num_transformers=2 * n_trees)
 
-    uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
-    l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
-
-    errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
-    errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    if bte:
+        uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
+        l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
+        errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
+        errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    else:
+        uf_task2 = uf.predict(test_task2, transformer_ids=[1], task_id=1)
+        l2f_task2 = progressive_learner.predict(test_task2, task_id=1)
+        errors[0] = 1 - np.mean(uf_task2 == test_label_task2)
+        errors[1] = 1 - np.mean(l2f_task2 == test_label_task2)
 
     return errors
 
@@ -885,7 +904,7 @@ def bte_v_angle(angle_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
     mean_te = np.zeros(len(angle_sweep), dtype=float)
     for ii, angle in enumerate(angle_sweep):
         error = np.array(
-            Parallel(n_jobs=-1, verbose=1)(
+            Parallel(n_jobs=-1, verbose=0)(
                 delayed(experiment_rxor)(
                     task1_sample,
                     task2_sample,
@@ -894,7 +913,8 @@ def bte_v_angle(angle_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
                     register_cpd=register_cpd,
                     register_nlr=register_nlr,
                     register_otp=register_otp,
-                    register_icp=register_icp
+                    register_icp=register_icp,
+                    bte = True
                 )
                 for _ in range(mc_rep)
             )
@@ -904,31 +924,77 @@ def bte_v_angle(angle_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
 
     return mean_te
 
-def plot_bte_v_angle(angle_sweep, mean_te1, mean_te2, mean_te3, mean_te4):
+def fte_v_angle(angle_sweep, task1_sample, task2_sample, mc_rep, register_cpd=False, register_nlr=False, register_otp=False, register_icp=False):
+    mean_te = np.zeros(len(angle_sweep), dtype=float)
+    for ii, angle in enumerate(angle_sweep):
+        error = np.array(
+            Parallel(n_jobs=-1, verbose=0)(
+                delayed(experiment_rxor)(
+                    task1_sample,
+                    task2_sample,
+                    task2_angle=angle*np.pi/180,
+                    max_depth=ceil(log2(task1_sample)),
+                    register_cpd=register_cpd,
+                    register_nlr=register_nlr,
+                    register_otp=register_otp,
+                    register_icp=register_icp,
+                    bte = False
+                )
+                for _ in range(mc_rep)
+            )
+        )
+
+        mean_te[ii] = np.mean(error[:, 0]) / np.mean(error[:, 1])
+
+    return mean_te
+
+def plot_te_v_angle(angle_sweep, btes, ftes):
     colors = sns.color_palette('Dark2', n_colors=5)
 
     sns.set_context("talk")
-    fig = plt.figure(constrained_layout=True, figsize=(25, 23))
-    gs = fig.add_gridspec(6, 6)
+    fig = plt.figure(constrained_layout=True, figsize=(25, 15))
+    gs = fig.add_gridspec(6, 12)
     ax = fig.add_subplot(gs[:6, :6])
     task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
-    ax.plot(angle_sweep, mean_te1, c=colors[0], linewidth=6, label=task[0])
-    ax.plot(angle_sweep, mean_te2, c=colors[1], linewidth=6, label=task[1])
-    ax.plot(angle_sweep, mean_te3, c=colors[2], linewidth=6, label=task[2])
-    ax.plot(angle_sweep, mean_te4, c=colors[3], linewidth=6, label=task[3])
-    ax.set_xlabel("Angle of Rotation (Degrees)", fontsize=50)
-    ax.set_ylabel("Backward Transfer Efficiency (XOR)", fontsize=50)
+    ax.plot(angle_sweep, btes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(angle_sweep, btes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(angle_sweep, btes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(angle_sweep, btes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Angle of Rotation (Degrees)", fontsize=30)
+    ax.set_ylabel("Backward Transfer Efficiency (XOR)", fontsize=30)
     ax.set_xticks(range(0,91,10))
     ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
-    ax.tick_params(labelsize=36)
+    ax.tick_params(labelsize=24)
     ax.hlines(1, 0, 90, colors="grey", linestyles="dashed", linewidth=1.5)
-    ax.legend(loc="lower left", fontsize=40, frameon=False)
-    ax.set_title("BTE vs Angle", fontsize=50)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("BTE vs Angle", fontsize=30)
 
     right_side = ax.spines["right"]
     right_side.set_visible(False)
     top_side = ax.spines["top"]
     top_side.set_visible(False)
+    
+    ax = fig.add_subplot(gs[:6, 6:])
+    task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
+    ax.plot(angle_sweep, ftes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(angle_sweep, ftes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(angle_sweep, ftes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(angle_sweep, ftes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Angle of Rotation (Degrees)", fontsize=30)
+    ax.set_ylabel("Forward Transfer Efficiency (XOR)", fontsize=30)
+    ax.set_xticks(range(0,91,10))
+    ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
+    ax.tick_params(labelsize=24)
+    ax.hlines(1, 0, 90, colors="grey", linestyles="dashed", linewidth=1.5)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("FTE vs Angle", fontsize=30)
+
+    right_side = ax.spines["right"]
+    right_side.set_visible(False)
+    top_side = ax.spines["top"]
+    top_side.set_visible(False)
+    
+    
     
 #Shear Experiment------------------------------------------------------------------------------------------------
 def experiment_sxor(
@@ -944,6 +1010,7 @@ def experiment_sxor(
     register_nlr=False,
     register_otp=False,
     register_icp=False,
+    bte=True
 ):
 
     if n_task1 == 0 and n_task2 == 0:
@@ -967,16 +1034,28 @@ def experiment_sxor(
     
     #transform task 2
     X_task2 = shearX(X_task2, s=task2_shear)
-    #test_task2 = shearX(test_task2, s=task2_shear)
+    test_task2 = shearX(test_task2, s=task2_shear)
     
     #registration
     if register_cpd:
-        X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = cpd_reg(X_task1.copy(), X_task2.copy())
+            
     if register_nlr:
-        X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = nlr_reg(X_task1.copy(), X_task2.copy())
+        
     if register_icp:
-        T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
-        X_task2 = X_3.T[:, 0:2]
+        if bte:
+            T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
+            X_task2 = X_3.T[:, 0:2]
+        else:
+            T, X_3, i = icp(X_task1.copy(), X_task2.copy(), y_task1.copy(), y_task2.copy())
+            X_task1 = X_3.T[:, 0:2]
 
     #train and predict
     progressive_learner.add_task(X_task1, y_task1, num_transformers=n_trees)
@@ -985,11 +1064,16 @@ def experiment_sxor(
     uf.add_task(X_task1, y_task1, num_transformers=2 * n_trees)
     uf.add_task(X_task2, y_task2, num_transformers=2 * n_trees)
 
-    uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
-    l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
-
-    errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
-    errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    if bte:
+        uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
+        l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
+        errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
+        errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    else:
+        uf_task2 = uf.predict(test_task2, transformer_ids=[1], task_id=1)
+        l2f_task2 = progressive_learner.predict(test_task2, task_id=1)
+        errors[0] = 1 - np.mean(uf_task2 == test_label_task2)
+        errors[1] = 1 - np.mean(l2f_task2 == test_label_task2)
 
     return errors
 
@@ -997,7 +1081,7 @@ def bte_v_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
     mean_te = np.zeros(len(shear_sweep), dtype=float)
     for ii, s in enumerate(shear_sweep):
         error = np.array(
-            Parallel(n_jobs=-1, verbose=1)(
+            Parallel(n_jobs=-1, verbose=0)(
                 delayed(experiment_sxor)(
                     task1_sample,
                     task2_sample,
@@ -1006,7 +1090,8 @@ def bte_v_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
                     register_cpd=register_cpd,
                     register_nlr=register_nlr,
                     register_otp=register_otp,
-                    register_icp=register_icp
+                    register_icp=register_icp,
+                    bte=True
                 )
                 for _ in range(mc_rep)
             )
@@ -1016,26 +1101,70 @@ def bte_v_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register_cpd=Fa
 
     return mean_te
 
-def plot_bte_v_shear(shear_sweep, mean_te1, mean_te2, mean_te3, mean_te4):
+def fte_v_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register_cpd=False, register_otp=False, register_icp=False, register_nlr=False):
+    mean_te = np.zeros(len(shear_sweep), dtype=float)
+    for ii, s in enumerate(shear_sweep):
+        error = np.array(
+            Parallel(n_jobs=-1, verbose=0)(
+                delayed(experiment_sxor)(
+                    task1_sample,
+                    task2_sample,
+                    task2_shear=s,
+                    max_depth=ceil(log2(task1_sample)),
+                    register_cpd=register_cpd,
+                    register_otp=register_otp,
+                    register_icp=register_icp,
+                    register_nlr=register_nlr,
+                    bte=False,
+                )
+                for _ in range(mc_rep)
+            )
+        )
+
+        mean_te[ii] = np.mean(error[:, 0]) / np.mean(error[:, 1])
+
+    return mean_te
+
+def plot_te_v_shear(shear_sweep, btes, ftes):
     colors = sns.color_palette('Dark2', n_colors=5)
 
     sns.set_context("talk")
-    fig = plt.figure(constrained_layout=True, figsize=(25, 23))
-    gs = fig.add_gridspec(6, 6)
+    fig = plt.figure(constrained_layout=True, figsize=(25, 15))
+    gs = fig.add_gridspec(6, 12)
     ax = fig.add_subplot(gs[:6, :6])
     task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
-    ax.plot(shear_sweep, mean_te1, c=colors[0], linewidth=6, label=task[0])
-    ax.plot(shear_sweep, mean_te2, c=colors[1], linewidth=6, label=task[1])
-    ax.plot(shear_sweep, mean_te3, c=colors[2], linewidth=6, label=task[2])
-    ax.plot(shear_sweep, mean_te4, c=colors[3], linewidth=6, label=task[3])
-    ax.set_xlabel("Shear Value (S)", fontsize=50)
-    ax.set_ylabel("Backward Transfer Efficiency (XOR)", fontsize=50)
+    ax.plot(shear_sweep, btes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(shear_sweep, btes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(shear_sweep, btes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(shear_sweep, btes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Shear Value (S)", fontsize=30)
+    ax.set_ylabel("Backward Transfer Efficiency (SXOR)", fontsize=30)
     ax.set_xscale('log')
     ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
-    ax.tick_params(labelsize=36)
+    ax.tick_params(labelsize=24)
     ax.hlines(1, 0, 500, colors="grey", linestyles="dashed", linewidth=1.5)
-    ax.legend(loc="lower left", fontsize=40, frameon=False)
-    ax.set_title("BTE vs Shear", fontsize=50)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("BTE vs Shear", fontsize=30)
+
+    right_side = ax.spines["right"]
+    right_side.set_visible(False)
+    top_side = ax.spines["top"]
+    top_side.set_visible(False)
+    
+    ax = fig.add_subplot(gs[:6, 6:])
+    task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
+    ax.plot(shear_sweep, ftes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(shear_sweep, ftes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(shear_sweep, ftes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(shear_sweep, ftes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Shear Value (S)", fontsize=30)
+    ax.set_ylabel("Forward Transfer Efficiency (SXOR)", fontsize=30)
+    ax.set_xscale('log')
+    ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
+    ax.tick_params(labelsize=24)
+    ax.hlines(1, 0, 500, colors="grey", linestyles="dashed", linewidth=1.5)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("FTE vs Shear", fontsize=30)
 
     right_side = ax.spines["right"]
     right_side.set_visible(False)
@@ -1056,6 +1185,7 @@ def experiment_ssxor(
     register_nlr=False,
     register_otp=False,
     register_icp=False,
+    bte=True
 ):
 
     if n_task1 == 0 and n_task2 == 0:
@@ -1083,12 +1213,24 @@ def experiment_ssxor(
  
     #registration
     if register_cpd:
-        X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = cpd_reg(X_task1.copy(), X_task2.copy())
+            
     if register_nlr:
-        X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = nlr_reg(X_task1.copy(), X_task2.copy())
+        
     if register_icp:
-        T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
-        X_task2 = X_3.T[:, 0:2]
+        if bte:
+            T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
+            X_task2 = X_3.T[:, 0:2]
+        else:
+            T, X_3, i = icp(X_task1.copy(), X_task2.copy(), y_task1.copy(), y_task2.copy())
+            X_task1 = X_3.T[:, 0:2]
 
     #train and predict
     progressive_learner.add_task(X_task1, y_task1, num_transformers=n_trees)
@@ -1097,11 +1239,16 @@ def experiment_ssxor(
     uf.add_task(X_task1, y_task1, num_transformers=2 * n_trees)
     uf.add_task(X_task2, y_task2, num_transformers=2 * n_trees)
 
-    uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
-    l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
-
-    errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
-    errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    if bte:
+        uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
+        l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
+        errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
+        errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    else:
+        uf_task2 = uf.predict(test_task2, transformer_ids=[1], task_id=1)
+        l2f_task2 = progressive_learner.predict(test_task2, task_id=1)
+        errors[0] = 1 - np.mean(uf_task2 == test_label_task2)
+        errors[1] = 1 - np.mean(l2f_task2 == test_label_task2)
 
     return errors
 
@@ -1109,7 +1256,7 @@ def bte_v_double_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register
     mean_te = np.zeros(len(shear_sweep), dtype=float)
     for ii, s in enumerate(shear_sweep):
         error = np.array(
-            Parallel(n_jobs=-1, verbose=1)(
+            Parallel(n_jobs=-1, verbose=0)(
                 delayed(experiment_ssxor)(
                     task1_sample,
                     task2_sample,
@@ -1118,7 +1265,8 @@ def bte_v_double_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register
                     register_cpd=register_cpd,
                     register_nlr=register_nlr,
                     register_otp=register_otp,
-                    register_icp=register_icp
+                    register_icp=register_icp,
+                    bte=True
                 )
                 for _ in range(mc_rep)
             )
@@ -1128,26 +1276,70 @@ def bte_v_double_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register
 
     return mean_te
 
-def plot_bte_v_double_shear(shear_sweep, mean_te1, mean_te2, mean_te3, mean_te4):
+def fte_v_double_shear(shear_sweep, task1_sample, task2_sample, mc_rep, register_cpd=False, register_nlr=False, register_otp=False, register_icp=False):
+    mean_te = np.zeros(len(shear_sweep), dtype=float)
+    for ii, s in enumerate(shear_sweep):
+        error = np.array(
+            Parallel(n_jobs=-1, verbose=0)(
+                delayed(experiment_ssxor)(
+                    task1_sample,
+                    task2_sample,
+                    task2_shear=s,
+                    max_depth=ceil(log2(task1_sample)),
+                    register_cpd=register_cpd,
+                    register_nlr=register_nlr,
+                    register_otp=register_otp,
+                    register_icp=register_icp,
+                    bte=False
+                )
+                for _ in range(mc_rep)
+            )
+        )
+
+        mean_te[ii] = np.mean(error[:, 0]) / np.mean(error[:, 1])
+
+    return mean_te
+
+def plot_te_v_double_shear(shear_sweep, btes, ftes):
     colors = sns.color_palette('Dark2', n_colors=5)
 
     sns.set_context("talk")
-    fig = plt.figure(constrained_layout=True, figsize=(25, 23))
-    gs = fig.add_gridspec(6, 6)
+    fig = plt.figure(constrained_layout=True, figsize=(25, 15))
+    gs = fig.add_gridspec(6, 12)
     ax = fig.add_subplot(gs[:6, :6])
     task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
-    ax.plot(shear_sweep, mean_te1, c=colors[0], linewidth=6, label=task[0])
-    ax.plot(shear_sweep, mean_te2, c=colors[1], linewidth=6, label=task[1])
-    ax.plot(shear_sweep, mean_te3, c=colors[2], linewidth=6, label=task[2])
-    ax.plot(shear_sweep, mean_te4, c=colors[3], linewidth=6, label=task[3])
-    ax.set_xlabel("Shear Value (SS)", fontsize=50)
-    ax.set_ylabel("Backward Transfer Efficiency (XOR)", fontsize=50)
+    ax.plot(shear_sweep, btes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(shear_sweep, btes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(shear_sweep, btes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(shear_sweep, btes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Shear Value (S)", fontsize=30)
+    ax.set_ylabel("Backward Transfer Efficiency (SSXOR)", fontsize=30)
     ax.set_xscale('log')
     ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
-    ax.tick_params(labelsize=36)
+    ax.tick_params(labelsize=24)
     ax.hlines(1, 0, 500, colors="grey", linestyles="dashed", linewidth=1.5)
-    ax.legend(loc="lower left", fontsize=40, frameon=False)
-    ax.set_title("BTE vs Double Shear", fontsize=50)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("BTE vs Double Shear", fontsize=30)
+
+    right_side = ax.spines["right"]
+    right_side.set_visible(False)
+    top_side = ax.spines["top"]
+    top_side.set_visible(False)
+    
+    ax = fig.add_subplot(gs[:6, 6:])
+    task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
+    ax.plot(shear_sweep, ftes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(shear_sweep, ftes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(shear_sweep, ftes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(shear_sweep, ftes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Shear Value (S)", fontsize=30)
+    ax.set_ylabel("Forward Transfer Efficiency (SSXOR)", fontsize=30)
+    ax.set_xscale('log')
+    ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
+    ax.tick_params(labelsize=24)
+    ax.hlines(1, 0, 500, colors="grey", linestyles="dashed", linewidth=1.5)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("FTE vs Double Shear", fontsize=30)
 
     right_side = ax.spines["right"]
     right_side.set_visible(False)
@@ -1168,6 +1360,7 @@ def experiment_txor(
     register_nlr=False,
     register_otp=False,
     register_icp=False,
+    bte=True
 ):
 
     if n_task1 == 0 and n_task2 == 0:
@@ -1191,16 +1384,28 @@ def experiment_txor(
     
     #transform task 2
     X_task2, y_task2 = div_translateX(X_task2, y_task2, t=task2_trans);
-    #test_task2, test_label_task2 = double_shearX(test_task2, test_label_task2, ss=(task2_shear, -task2_shear));
+    test_task2, test_label_task2 = div_translateX(test_task2, test_label_task2, t=task2_trans);
  
     #registration
     if register_cpd:
-        X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())  
+        if bte:
+            X_task2 = cpd_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = cpd_reg(X_task1.copy(), X_task2.copy())
+            
     if register_nlr:
-        X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        if bte:
+            X_task2 = nlr_reg(X_task2.copy(), X_task1.copy())
+        else:
+            X_task1 = nlr_reg(X_task1.copy(), X_task2.copy())
+        
     if register_icp:
-        T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
-        X_task2 = X_3.T[:, 0:2]
+        if bte:
+            T, X_3, i = icp(X_task2.copy(), X_task1.copy(), y_task2.copy(), y_task1.copy())
+            X_task2 = X_3.T[:, 0:2]
+        else:
+            T, X_3, i = icp(X_task1.copy(), X_task2.copy(), y_task1.copy(), y_task2.copy())
+            X_task1 = X_3.T[:, 0:2]
 
     #train and predict
     progressive_learner.add_task(X_task1, y_task1, num_transformers=n_trees)
@@ -1209,11 +1414,16 @@ def experiment_txor(
     uf.add_task(X_task1, y_task1, num_transformers=2 * n_trees)
     uf.add_task(X_task2, y_task2, num_transformers=2 * n_trees)
 
-    uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
-    l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
-
-    errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
-    errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    if bte:
+        uf_task1 = uf.predict(test_task1, transformer_ids=[0], task_id=0)
+        l2f_task1 = progressive_learner.predict(test_task1, task_id=0)
+        errors[0] = 1 - np.mean(uf_task1 == test_label_task1)
+        errors[1] = 1 - np.mean(l2f_task1 == test_label_task1)
+    else:
+        uf_task2 = uf.predict(test_task2, transformer_ids=[1], task_id=1)
+        l2f_task2 = progressive_learner.predict(test_task2, task_id=1)
+        errors[0] = 1 - np.mean(uf_task2 == test_label_task2)
+        errors[1] = 1 - np.mean(l2f_task2 == test_label_task2)
 
     return errors
 
@@ -1221,7 +1431,7 @@ def bte_v_translate(trans_sweep, task1_sample, task2_sample, mc_rep, register_cp
     mean_te = np.zeros(len(trans_sweep), dtype=float)
     for ii, t in enumerate(trans_sweep):
         error = np.array(
-            Parallel(n_jobs=-1, verbose=1)(
+            Parallel(n_jobs=-1, verbose=0)(
                 delayed(experiment_txor)(
                     task1_sample,
                     task2_sample,
@@ -1230,7 +1440,8 @@ def bte_v_translate(trans_sweep, task1_sample, task2_sample, mc_rep, register_cp
                     register_cpd=register_cpd,
                     register_nlr=register_nlr,
                     register_otp=register_otp,
-                    register_icp=register_icp
+                    register_icp=register_icp,
+                    bte=True
                 )
                 for _ in range(mc_rep)
             )
@@ -1240,25 +1451,68 @@ def bte_v_translate(trans_sweep, task1_sample, task2_sample, mc_rep, register_cp
 
     return mean_te
 
-def plot_bte_v_translate(trans_sweep, mean_te1, mean_te2, mean_te3, mean_te4):
+def fte_v_translate(trans_sweep, task1_sample, task2_sample, mc_rep, register_cpd=False, register_nlr=False, register_otp=False, register_icp=False):
+    mean_te = np.zeros(len(trans_sweep), dtype=float)
+    for ii, t in enumerate(trans_sweep):
+        error = np.array(
+            Parallel(n_jobs=-1, verbose=0)(
+                delayed(experiment_txor)(
+                    task1_sample,
+                    task2_sample,
+                    task2_trans=t,
+                    max_depth=ceil(log2(task1_sample)),
+                    register_cpd=register_cpd,
+                    register_nlr=register_nlr,
+                    register_otp=register_otp,
+                    register_icp=register_icp,
+                    bte=False
+                )
+                for _ in range(mc_rep)
+            )
+        )
+
+        mean_te[ii] = np.mean(error[:, 0]) / np.mean(error[:, 1])
+
+    return mean_te
+
+def plot_bte_v_translate(trans_sweep, btes, ftes):
     colors = sns.color_palette('Dark2', n_colors=5)
 
     sns.set_context("talk")
-    fig = plt.figure(constrained_layout=True, figsize=(25, 23))
-    gs = fig.add_gridspec(6, 6)
+    fig = plt.figure(constrained_layout=True, figsize=(25, 15))
+    gs = fig.add_gridspec(6, 12)
     ax = fig.add_subplot(gs[:6, :6])
     task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
-    ax.plot(trans_sweep, mean_te1, c=colors[0], linewidth=6, label=task[0])
-    ax.plot(trans_sweep, mean_te2, c=colors[1], linewidth=6, label=task[1])
-    ax.plot(trans_sweep, mean_te3, c=colors[2], linewidth=6, label=task[2])
-    ax.plot(trans_sweep, mean_te4, c=colors[3], linewidth=6, label=task[3])
-    ax.set_xlabel("Translate Value (T)", fontsize=50)
-    ax.set_ylabel("Backward Transfer Efficiency (XOR)", fontsize=50)
+    ax.plot(trans_sweep, btes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(trans_sweep, btes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(trans_sweep, btes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(trans_sweep, btes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Translate Value (T)", fontsize=30)
+    ax.set_ylabel("Backward Transfer Efficiency (TXOR)", fontsize=30)
     ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
-    ax.tick_params(labelsize=36)
+    ax.tick_params(labelsize=24)
     ax.hlines(1, 0, 2, colors="grey", linestyles="dashed", linewidth=1.5)
-    ax.legend(loc="lower left", fontsize=40, frameon=False)
-    ax.set_title("BTE vs Divergent Translation", fontsize=50)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("BTE vs Divergent Translation", fontsize=30)
+
+    right_side = ax.spines["right"]
+    right_side.set_visible(False)
+    top_side = ax.spines["top"]
+    top_side.set_visible(False)
+    
+    ax = fig.add_subplot(gs[:6, 6:])
+    task = ["No adaptation", "CPD (Affine)", "ICP", "CPD (Nonlinear)"]
+    ax.plot(trans_sweep, ftes[0], c=colors[0], linewidth=3, label=task[0])
+    ax.plot(trans_sweep, ftes[1], c=colors[1], linewidth=3, label=task[1])
+    ax.plot(trans_sweep, ftes[2], c=colors[2], linewidth=3, label=task[2])
+    ax.plot(trans_sweep, ftes[3], c=colors[3], linewidth=3, label=task[3])
+    ax.set_xlabel("Translate Value (T)", fontsize=30)
+    ax.set_ylabel("Forward Transfer Efficiency (TXOR)", fontsize=30)
+    ax.set_yticks([0.9, 1, 1.1, 1.2, 1.3])
+    ax.tick_params(labelsize=24)
+    ax.hlines(1, 0, 2, colors="grey", linestyles="dashed", linewidth=1.5)
+    ax.legend(loc="lower left", fontsize=20, frameon=False)
+    ax.set_title("FTE vs Divergent Translation", fontsize=30)
 
     right_side = ax.spines["right"]
     right_side.set_visible(False)
