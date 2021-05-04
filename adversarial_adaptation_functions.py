@@ -1804,6 +1804,6 @@ def visualize_ellip_transform(angle=45, n_samples_source=200, n_trees=10):
             ax.scatter(data[i][:,0], data[i][:,1], c=labels[i][:,0], s=10)
             ax.set_xlim(xylim); ax.set_ylim(xylim)
             if i == 0:
-                ax.set_ylabel(ylabels[i], fontsize=20)
+                ax.set_ylabel(ylabels[transform], fontsize=20)
             if transform == 0:
                 ax.set_title(titles[i], fontsize=20)
