@@ -592,7 +592,6 @@ def view_txor(t=0.4):
     X_xor, y_xor = generate_gaussian_parity(1000)
     X_rxor, y_rxor = generate_gaussian_parity(1000)
     X_txor, y_txor = div_translateX(X_rxor, y_rxor, t=t)
-    X_axor, y_axor = nlr_reg(X_txor.copy(), X_xor.copy()), y_txor.copy()
 
     colors = sns.color_palette('Dark2', n_colors=2)
     fig, ax = plt.subplots(1,2, figsize=(16,8))
