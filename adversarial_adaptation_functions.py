@@ -279,8 +279,8 @@ def cpd_reg(template, target, max_iter=200):
     
     return deformed_template[0]
 
-def nlr_reg(template, target, max_iter=200, alpha=0.75):    
-    registration = DeformableRegistration(X=target, Y=template, alpha=alpha, max_iterations=max_iter)
+def nlr_reg(template, target, max_iter=200, alpha=0.001, beta=2):    
+    registration = DeformableRegistration(X=target, Y=template, alpha=alpha, beta=beta, max_iterations=max_iter, tolerance=1e-8)
     deformed_template = registration.register(template)
     
     return deformed_template[0]
@@ -735,6 +735,152 @@ def view_ssEllip(ss=(np.tan(65), np.tan(-65))):
     ax[1].axis('off')
 
     plt.tight_layout()
+    
+def visualize_XOR_transform(Rotation=False, Shear=False, Nonlinear=False, Translate=False):
+    cmap_light = ListedColormap(['#FFBBBB', '#BBFFBB', '#BBBBFF'])
+    cmap_bold = ListedColormap(['#CC0000', '#00AA00', '#0000CC'])
+
+    #Grid Setup
+    l = 3
+    h = 0.05 
+    xx, yy = np.meshgrid(np.arange(-l, l, h), np.arange(-l, l, h))
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    
+    #distribution generation
+    X = [];
+    y = [];
+    
+    if Rotation: 
+        S = [30, 45, 60, 90]
+
+        for i in S:
+            D,c = generate_gaussian_parity(100, angle_params=i);
+    
+            X.append(D);
+            y.append(c);
+    
+    elif Shear:
+        S = [1, 2, 5, 10]
+
+        for i in S:
+            D,c = generate_gaussian_parity(100);
+            D = shearX(D, s=i)
+    
+            X.append(D);
+            y.append(c);
+            
+    elif Nonlinear:
+        S = [1, 2, 5, 10]
+    
+        for i in S:
+            D,c = generate_gaussian_parity(100);
+            D,c = double_shearX(D,c, ss=(i,-i));
+    
+            X.append(D);
+            y.append(c);
+            
+    elif Translate:
+        S = [0.5, 1, 1.5, 2]
+        
+        for i in S:
+            D,c = generate_gaussian_parity(100);
+            D,c = div_translateX(D, c, t=i);
+    
+            X.append(D);
+            y.append(c);
+
+    #Original XOR
+    U,v = generate_gaussian_parity(100);
+    
+    #Prarameters
+    n_trees=10
+    max_depth=None
+
+    c_afn = [];
+    p_afn = [];
+    x_afn = [];
+
+    for i in range(len(S)):
+        #Model
+        default_transformer_class = TreeClassificationTransformer
+        default_transformer_kwargs = {"kwargs" : {"max_depth" : max_depth}}
+
+        default_voter_class = TreeClassificationVoter
+        default_voter_kwargs = {}
+
+        default_decider_class = SimpleArgmaxAverage
+        default_decider_kwargs = {"classes" : np.arange(2)}
+        progressive_learner = ProgressiveLearner(
+            default_transformer_class = default_transformer_class,
+            default_transformer_kwargs = default_transformer_kwargs,
+            default_voter_class = default_voter_class,
+            default_voter_kwargs = default_voter_kwargs,
+            default_decider_class = default_decider_class,
+            default_decider_kwargs = default_decider_kwargs)
+
+        #Adaptation
+        x = cpd_reg(X[i], U)
+        
+        if Nonlinear:
+            x = nlr_reg(x, U, beta=1)
+        if Translate:
+            x = nlr_reg(x, U, beta=1)
+    
+        #Training and Prediction
+        progressive_learner.add_task(U, v, num_transformers=n_trees)
+        progressive_learner.add_task(X[i], y[i], num_transformers=n_trees)
+    
+        z = progressive_learner.predict(grid, task_id=0)
+        q = progressive_learner.task_id_to_decider[0].predict_proba(grid)[:,0]
+    
+        #Store values
+        c_afn.append(z)
+        p_afn.append(q)
+        x_afn.append(x)
+    
+    #Plot Decisions
+    l = 2;
+    w = 4;
+    n = len(S)
+    plt.figure(figsize=(w*7, n*7))
+
+    for i in range(n):
+        #Decision Boundary
+        dnl = c_afn[i];
+        dnl = dnl.reshape(xx.shape);
+    
+        #Posteriors
+        pnl = p_afn[i];
+        pnl = pnl.reshape(xx.shape);
+    
+        #Task 2 Distribution
+        x = x_afn[i];
+        x_orig = X[i]
+    
+        plt.subplot(n,w, w*i+1);
+        plt.scatter(x_orig[:,0], x_orig[:,1], c=y[i], cmap=cmap_bold);
+        if Rotation:
+            plt.xlim([-l,l]); plt.ylim([-l,l]);
+        plt.grid(); plt.title('Task 2');
+    
+        plt.subplot(n,w, w*i+2);
+        plt.scatter(x[:,0], x[:,1], c=y[i], cmap=cmap_bold);
+        plt.xlim([-l,l]); plt.ylim([-l,l]);
+        plt.grid(); plt.title('Adapted Task 2');  
+    
+        plt.subplot(n,w, w*i+3);
+        plt.pcolormesh(xx, yy, dnl, cmap=cmap_light);
+        plt.scatter(U[:,0], U[:,1], c=v, cmap=cmap_bold);
+        plt.xlim([-l,l]); plt.ylim([-l,l]);
+        plt.title('Combined Decision Boundaries');
+    
+        plt.subplot(n,w, w*i+4);
+        plt.pcolormesh(xx, yy, pnl);
+        plt.xlim([-l,l]); plt.ylim([-l,l]);
+        plt.title('Combined Posteriors');
+    
+
+
 
    
 ## EXPERIMENT FUNCTIONS ##--------------------------------------------------------------------------------------
