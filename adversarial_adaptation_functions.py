@@ -1759,3 +1759,51 @@ def plot_te_v_angle_res_pos(TEs_all):
                         ax.set_xlabel('Angle of Transformation (Degrees)', fontsize=fontsize)
                     if i == 2:
                         ax.legend(loc='upper center', fontsize=20, frameon=False)
+
+
+def visualize_ellip_transform(angle=45, n_samples_source=200, n_trees=10):
+    fig,axs = plt.subplots(3,4, figsize=(16,12))
+    colors = sns.color_palette('Dark2', n_colors=5)
+    cmap_light = ListedColormap(['#FFBBBB', '#BBFFBB', '#BBBBFF'])
+    cmap_bold = ListedColormap(['#CC0000', '#00AA00', '#0000CC'])
+    titles = ['Task 1','Adapted Task1', 'Task 2', 'Adapted Task 2']
+    ylabels = ['Rigid', 'Affine', 'Nonlinear']
+    xylim = [-7, 7]
+    for transform in range(3):
+        [train_x1, train_x2_rot, test_x1, _, test_x2_rot, _], l2f, _ =\
+            get_data(angle, transform, n_samples_source, n_trees)   
+        reg = [1.0,1.0,1.0]
+        if transform == 0:
+            # SP
+            SP = SeedlessProcrustes(optimal_transport_lambda=reg[transform], optimal_transport_eps=10e-15,
+                                   optimal_transport_num_reps=10)
+            SP.fit(train_x1, train_x2_rot)
+            test_x1_trans = SP.transform(test_x1)
+
+            SP = SeedlessProcrustes(optimal_transport_lambda=reg[transform], optimal_transport_eps=10e-15,
+                                   optimal_transport_num_reps=10)
+            SP.fit(train_x2_rot, train_x1)
+            test_x2_trans = SP.transform(test_x2_rot)
+        else:
+            # OT
+            OT = ot.da.SinkhornTransport(reg_e=0.15, tol=10e-15)
+            OT.fit(Xs=train_x1, Xt=train_x2_rot)
+            test_x1_trans = OT.transform(Xs=test_x1)
+            test_x2_trans = OT.inverse_transform(Xt=test_x2_rot)
+        data = [test_x1, test_x1_trans, test_x2_rot, test_x2_trans]
+        # generate posteriors
+        l2f_task1_pos = generate_posteriors(test_x1, 0, l2f, [0,1])[0]
+        l2f_task2_pos = generate_posteriors(test_x2_rot, 1, l2f, [0,1])[1]
+        l2f_task1_pos_trans = generate_posteriors(test_x1_trans, 1, l2f, [0,1])[1]
+        l2f_task2_pos_trans = generate_posteriors(test_x2_trans, 0, l2f, [0,1])[0]
+        labels = [l2f_task1_pos, l2f_task1_pos_trans, l2f_task2_pos, l2f_task2_pos_trans]
+        for i in range(len(data)):
+            ax = axs[transform, i]
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.scatter(data[i][:,0], data[i][:,1], c=labels[i][:,0], s=10)
+            ax.set_xlim(xylim); ax.set_ylim(xylim)
+            if i == 0:
+                ax.set_ylabel(ylabels[i])
+            if transform == 0:
+                ax.set_title(titles[i], fontsize=20)
